@@ -1,0 +1,346 @@
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import type { CompiledPromptSetV2, ReferenceImage } from './types';
+
+const MAX_REFERENCES = 5;
+
+function validateCompiledPromptSet(value: unknown): asserts value is CompiledPromptSetV2 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('CompiledPromptSetV2 must be a JSON object.');
+  }
+
+  const compiledSet = value as Record<string, unknown>;
+
+  if (compiledSet.compilerVersion !== 1) {
+    throw new Error('compilerVersion must be the numeric literal 1.');
+  }
+  if (typeof compiledSet.sourceFingerprint !== 'string' || !compiledSet.sourceFingerprint.trim()) {
+    throw new Error('sourceFingerprint must be a non-empty string.');
+  }
+  if (compiledSet.voiceGender !== 'FEMALE' && compiledSet.voiceGender !== 'MALE') {
+    throw new Error('voiceGender must be exactly FEMALE or MALE.');
+  }
+  if (!Array.isArray(compiledSet.scenes) || compiledSet.scenes.length !== 4) {
+    throw new Error('scenes must contain exactly 4 entries.');
+  }
+
+  const sceneNumbers = new Set<number>();
+  const sceneModes = new Set(['PRESENTATION', 'DEMONSTRATION']);
+  const sceneActions = new Set([
+    'PRESENT',
+    'MOVE',
+    'REORIENT',
+    'PRESS_RELEASE',
+    'OPEN',
+    'CLOSE',
+    'CONNECT',
+    'DISCONNECT',
+    'REMOVE',
+  ]);
+  const cameraIntents = new Set([
+    'OVERVIEW_REVEAL',
+    'ACTION_READABILITY',
+    'DETAIL_INSPECTION',
+    'PRODUCT_PRESENTATION',
+  ]);
+
+  compiledSet.scenes.forEach((sceneValue, index) => {
+    const label = `scenes[${index}]`;
+    if (!sceneValue || typeof sceneValue !== 'object' || Array.isArray(sceneValue)) {
+      throw new Error(`${label} must be an object.`);
+    }
+
+    const scene = sceneValue as Record<string, unknown>;
+    if (!Number.isInteger(scene.sceneNumber) || ![1, 2, 3, 4].includes(scene.sceneNumber as number)) {
+      throw new Error(`${label}.sceneNumber must be an integer from 1 to 4.`);
+    }
+    if (sceneNumbers.has(scene.sceneNumber as number)) {
+      throw new Error('scenes must contain sceneNumber 1, 2, 3 and 4 exactly once.');
+    }
+    sceneNumbers.add(scene.sceneNumber as number);
+
+    if (typeof scene.finalPrompt !== 'string' || !scene.finalPrompt.trim()) {
+      throw new Error(`${label}.finalPrompt must be a non-empty string.`);
+    }
+    if (typeof scene.characterCount !== 'number' || !Number.isFinite(scene.characterCount)) {
+      throw new Error(`${label}.characterCount must be a finite number.`);
+    }
+    if (typeof scene.primaryReferenceId !== 'string' || !scene.primaryReferenceId.trim()) {
+      throw new Error(`${label}.primaryReferenceId must be a non-empty string.`);
+    }
+    if (!Array.isArray(scene.supportingReferenceIds) ||
+        !scene.supportingReferenceIds.every((id) => typeof id === 'string')) {
+      throw new Error(`${label}.supportingReferenceIds must be an array of strings.`);
+    }
+    if (!scene.inspectionMetadata ||
+        typeof scene.inspectionMetadata !== 'object' ||
+        Array.isArray(scene.inspectionMetadata)) {
+      throw new Error(`${label}.inspectionMetadata must be an object.`);
+    }
+
+    const metadata = scene.inspectionMetadata as Record<string, unknown>;
+    if (typeof metadata.productName !== 'string' || !metadata.productName.trim()) {
+      throw new Error(`${label}.inspectionMetadata.productName must be a non-empty string.`);
+    }
+    if (typeof metadata.sceneMode !== 'string' || !sceneModes.has(metadata.sceneMode)) {
+      throw new Error(`${label}.inspectionMetadata.sceneMode is invalid.`);
+    }
+    if (typeof metadata.action !== 'string' || !sceneActions.has(metadata.action)) {
+      throw new Error(`${label}.inspectionMetadata.action is invalid.`);
+    }
+    if (typeof metadata.dialogue !== 'string') {
+      throw new Error(`${label}.inspectionMetadata.dialogue must be a string.`);
+    }
+    if (typeof metadata.cameraIntent !== 'string' || !cameraIntents.has(metadata.cameraIntent)) {
+      throw new Error(`${label}.inspectionMetadata.cameraIntent is invalid.`);
+    }
+  });
+
+  if (sceneNumbers.size !== 4) {
+    throw new Error('scenes must contain sceneNumber 1, 2, 3 and 4 exactly once.');
+  }
+}
+
+function readReference(file: File): Promise<ReferenceImage> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        reject(new Error(`Could not read ${file.name}.`));
+        return;
+      }
+
+      const base64 = reader.result.split(',', 2)[1];
+      if (!base64) {
+        reject(new Error(`Could not read ${file.name}.`));
+        return;
+      }
+
+      resolve({
+        id: crypto.randomUUID(),
+        base64,
+        mimeType: file.type,
+        name: file.name,
+      });
+    };
+
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function App() {
+  const [references, setReferences] = useState<ReferenceImage[]>([]);
+  const [error, setError] = useState('');
+  const [compiledSet, setCompiledSet] = useState<CompiledPromptSetV2 | null>(null);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [rawCompiledSet, setRawCompiledSet] = useState('');
+  const [importError, setImportError] = useState('');
+  const isUploading = useRef(false);
+  const replacingId = useRef<string | null>(null);
+  const replacementInput = useRef<HTMLInputElement>(null);
+
+  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = '';
+    setError('');
+
+    if (files.length === 0) return;
+
+    if (isUploading.current) {
+      setError('Please wait for the current images to finish loading.');
+      return;
+    }
+
+    if (references.length + files.length > MAX_REFERENCES) {
+      setError(`Maximum ${MAX_REFERENCES} reference images. No images were added.`);
+      return;
+    }
+
+    isUploading.current = true;
+    try {
+      const uploadedReferences = await Promise.all(files.map(readReference));
+      setReferences((current) => [...current, ...uploadedReferences]);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : 'Could not read the selected images.');
+    } finally {
+      isUploading.current = false;
+    }
+  }
+
+  function handleDelete(id: string) {
+    setReferences((current) => current.filter((reference) => reference.id !== id));
+  }
+
+  function openReplacementPicker(id: string) {
+    replacingId.current = id;
+    replacementInput.current?.click();
+  }
+
+  async function handleReplace(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    const targetId = replacingId.current;
+    event.target.value = '';
+    replacingId.current = null;
+    setError('');
+
+    if (!file || !targetId) return;
+
+    try {
+      const replacement = await readReference(file);
+      setReferences((current) =>
+        current.map((reference) => reference.id === targetId ? replacement : reference),
+      );
+    } catch (replaceError) {
+      setError(replaceError instanceof Error ? replaceError.message : 'Could not read the selected image.');
+    }
+  }
+
+  function openImport() {
+    setRawCompiledSet('');
+    setImportError('');
+    setIsImportOpen(true);
+  }
+
+  function cancelImport() {
+    setRawCompiledSet('');
+    setImportError('');
+    setIsImportOpen(false);
+  }
+
+  function confirmImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setImportError('');
+
+    try {
+      const parsed: unknown = JSON.parse(rawCompiledSet);
+      validateCompiledPromptSet(parsed);
+      setCompiledSet(parsed);
+      setRawCompiledSet('');
+      setIsImportOpen(false);
+    } catch (importFailure) {
+      setImportError(
+        importFailure instanceof Error
+          ? importFailure.message
+          : 'Could not import CompiledPromptSetV2.',
+      );
+    }
+  }
+
+  const isReady = references.length >= 1 && references.length <= MAX_REFERENCES;
+
+  return (
+    <main className="app-shell">
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">MOCHI SCENES V4 · G0/G1/G2</p>
+          <h1>Local Reference Library</h1>
+          <p className="subtitle">Prepare up to five local product references for future scene stages.</p>
+        </div>
+        <div className={`readiness ${isReady ? 'readiness--ready' : ''}`}>
+          <span aria-hidden="true" />
+          <div>
+            <strong>{isReady ? 'Ready for scenes' : 'Not ready'}</strong>
+            <small>{references.length} / {MAX_REFERENCES} references</small>
+          </div>
+        </div>
+      </header>
+
+      <section className="import-panel" aria-labelledby="import-title">
+        <div className="import-heading">
+          <div>
+            <h2 id="import-title">CompiledPromptSetV2</h2>
+            {compiledSet ? (
+              <p className="imported-summary">
+                Imported · {compiledSet.scenes.length} scenes · {compiledSet.voiceGender}
+                <span title={compiledSet.sourceFingerprint}>{compiledSet.sourceFingerprint}</span>
+              </p>
+            ) : (
+              <p>No compiled prompt set imported.</p>
+            )}
+          </div>
+          {!isImportOpen && (
+            <button className="primary-control" type="button" onClick={openImport}>
+              {compiledSet ? 'Replace import' : 'Import CompiledPromptSetV2'}
+            </button>
+          )}
+        </div>
+
+        {isImportOpen && (
+          <form className="import-form" onSubmit={confirmImport}>
+            <label htmlFor="compiled-set-json">Paste raw CompiledPromptSetV2 JSON</label>
+            <textarea
+              id="compiled-set-json"
+              value={rawCompiledSet}
+              onChange={(event) => setRawCompiledSet(event.target.value)}
+              placeholder="{ &quot;compilerVersion&quot;: 1, ... }"
+              rows={12}
+              spellCheck={false}
+              autoFocus
+            />
+            {importError && <p className="error-message" role="alert">{importError}</p>}
+            <div className="import-actions">
+              <button type="button" onClick={cancelImport}>Cancel</button>
+              <button className="primary-control" type="submit">Confirm import</button>
+            </div>
+          </form>
+        )}
+      </section>
+
+      <section className="intake-panel" aria-labelledby="intake-title">
+        <div>
+          <h2 id="intake-title">Reference intake</h2>
+          <p>Select one or multiple image files. Images stay in this browser session.</p>
+        </div>
+        <label className="primary-control">
+          Upload images
+          <input type="file" accept="image/*" multiple onChange={handleUpload} />
+        </label>
+      </section>
+
+      {error && <p className="error-message" role="alert">{error}</p>}
+
+      <input
+        ref={replacementInput}
+        className="visually-hidden"
+        type="file"
+        accept="image/*"
+        onChange={handleReplace}
+      />
+
+      {references.length === 0 ? (
+        <section className="empty-state">
+          <span aria-hidden="true">+</span>
+          <h2>No reference images</h2>
+          <p>Upload at least one image to make the local library ready.</p>
+        </section>
+      ) : (
+        <section className="reference-grid" aria-label="Uploaded reference images">
+          {references.map((reference, index) => (
+            <article className="reference-card" key={reference.id}>
+              <img
+                src={`data:${reference.mimeType};base64,${reference.base64}`}
+                alt={`Reference ${index + 1}: ${reference.name}`}
+              />
+              <div className="reference-content">
+                <p className="reference-label">REFERENCE {index + 1}</p>
+                <h2 title={reference.name}>{reference.name}</h2>
+                <p className="mime-type">{reference.mimeType || 'image'}</p>
+                <div className="reference-actions">
+                  <button type="button" onClick={() => openReplacementPicker(reference.id)}>
+                    Replace
+                  </button>
+                  <button className="delete-control" type="button" onClick={() => handleDelete(reference.id)}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+    </main>
+  );
+}
+
+export default App;
