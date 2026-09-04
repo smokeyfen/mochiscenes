@@ -40,11 +40,6 @@ function validateRequest(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Request body must be a JSON object.');
   }
-  if (Object.keys(value).length !== 2 ||
-      !Object.hasOwn(value, 'references') ||
-      !Object.hasOwn(value, 'scenes')) {
-    throw new Error('Request body must contain only references and scenes.');
-  }
   if (Object.keys(value).length !== 1 || !Object.hasOwn(value, 'images')) {
     throw new Error('Request body must contain only images.');
   }
@@ -123,6 +118,11 @@ function createInstruction(imageCount) {
 function validateSelectionRequest(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('Request body must be a JSON object.');
+  }
+  if (Object.keys(value).length !== 2 ||
+      !Object.hasOwn(value, 'references') ||
+      !Object.hasOwn(value, 'scenes')) {
+    throw new Error('Request body must contain only references and scenes.');
   }
   if (!Array.isArray(value.references) || value.references.length < 1 || value.references.length > 5) {
     throw new Error('references must be an array containing 1 to 5 items.');
