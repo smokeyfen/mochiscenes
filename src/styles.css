@@ -418,6 +418,17 @@ button:disabled {
   font-size: 0.8rem;
 }
 
+.section-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-actions > span {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
 .scene-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -473,6 +484,81 @@ button:disabled {
 .original-ids dd {
   overflow-wrap: anywhere;
   margin: 5px 0 0;
+}
+
+.matched-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.matched-heading h4 {
+  margin-bottom: 0;
+}
+
+.matched-status,
+.unmatched-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.matched-status {
+  color: #86efac;
+  background: #123323;
+}
+
+.unmatched-status {
+  color: #94a3b8;
+  background: #252d38;
+}
+
+.matched-thumbnails {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.matched-thumbnails figure {
+  min-width: 0;
+  margin: 0;
+}
+
+.matched-thumbnails img,
+.missing-thumbnail {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 7px;
+  object-fit: cover;
+  background: #0d1217;
+}
+
+.missing-thumbnail {
+  display: grid;
+  place-items: center;
+  color: #94a3b8;
+  font-size: 0.7rem;
+}
+
+.matched-thumbnails figcaption {
+  overflow: hidden;
+  margin-top: 5px;
+  color: #94a3b8;
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-reason {
+  margin-top: 10px !important;
+  color: #cdd7e2;
+  font-size: 0.85rem;
 }
 
 .scene-metadata dd {
@@ -556,6 +642,11 @@ button:disabled {
 
   .analysis-grid {
     grid-template-columns: 1fr;
+  }
+
+  .section-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .scene-grid {

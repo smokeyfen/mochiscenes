@@ -1,5 +1,11 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import type { CompiledPromptSetV2, LibraryAnalysis, ReferenceImage } from './types';
+import type {
+  CompiledPromptSetV2,
+  CompiledScenePromptV2,
+  LibraryAnalysis,
+  ReferenceImage,
+  SceneSelection,
+} from './types';
 
 const MAX_REFERENCES = 5;
 
@@ -192,6 +198,87 @@ function validateAndMapAnalysis(
   };
 }
 
+function compactText(value: string, maximumLength: number) {
+  return value.replace(/[\u0000-\u001f"\\]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maximumLength);
+}
+
+function validateAndMapSelections(
+  value: unknown,
+  sceneSnapshot: readonly CompiledScenePromptV2[],
+  analysisSnapshot: LibraryAnalysis,
+): SceneSelection[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Selection response must be a JSON object.');
+  }
+
+  const response = value as Record<string, unknown>;
+  if (!Array.isArray(response.selections) || response.selections.length !== 4) {
+    throw new Error('Selection response must contain exactly 4 selections.');
+  }
+
+  const expectedSceneNumbers = new Set(sceneSnapshot.map((scene) => scene.sceneNumber));
+  const seenSceneNumbers = new Set<number>();
+  const validatedSelections = response.selections.map((selectionValue, position) => {
+    const label = `selections[${position}]`;
+    if (!selectionValue || typeof selectionValue !== 'object' || Array.isArray(selectionValue)) {
+      throw new Error(`${label} must be an object.`);
+    }
+
+    const selection = selectionValue as Record<string, unknown>;
+    if (!Number.isInteger(selection.sceneNumber) ||
+        !expectedSceneNumbers.has(selection.sceneNumber as 1 | 2 | 3 | 4)) {
+      throw new Error(`${label}.sceneNumber must be an integer from 1 to 4.`);
+    }
+
+    const sceneNumber = selection.sceneNumber as 1 | 2 | 3 | 4;
+    if (seenSceneNumbers.has(sceneNumber)) {
+      throw new Error(`Selection response contains duplicate sceneNumber ${sceneNumber}.`);
+    }
+    seenSceneNumbers.add(sceneNumber);
+
+    if (!Array.isArray(selection.selectedIndices) || selection.selectedIndices.length === 0) {
+      throw new Error(`${label}.selectedIndices must be a non-empty array.`);
+    }
+
+    const seenIndices = new Set<number>();
+    const selectedIndices = selection.selectedIndices.map((indexValue, indexPosition) => {
+      if (!Number.isInteger(indexValue)) {
+        throw new Error(`${label}.selectedIndices[${indexPosition}] must be an integer.`);
+      }
+
+      const inputIndex = indexValue as number;
+      if (inputIndex < 0 || inputIndex >= analysisSnapshot.images.length) {
+        throw new Error(`${label}.selectedIndices[${indexPosition}] is outside the analysis snapshot.`);
+      }
+      if (seenIndices.has(inputIndex)) {
+        throw new Error(`${label}.selectedIndices contains duplicate index ${inputIndex}.`);
+      }
+      seenIndices.add(inputIndex);
+      return inputIndex;
+    });
+
+    if (typeof selection.reason !== 'string' || !selection.reason.trim()) {
+      throw new Error(`${label}.reason must be a non-empty string.`);
+    }
+
+    return { sceneNumber, selectedIndices, reason: selection.reason };
+  });
+
+  for (const scene of sceneSnapshot) {
+    if (!seenSceneNumbers.has(scene.sceneNumber)) {
+      throw new Error(`Selection response is missing sceneNumber ${scene.sceneNumber}.`);
+    }
+  }
+
+  return validatedSelections.map((selection) => ({
+    sceneNumber: selection.sceneNumber,
+    selectedLocalIds: selection.selectedIndices.map(
+      (inputIndex) => analysisSnapshot.images[inputIndex].id,
+    ),
+    reason: selection.reason,
+  }));
+}
+
 function readReference(file: File): Promise<ReferenceImage> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -232,15 +319,27 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const analysisTokenRef = useRef<string | null>(null);
+  const [selections, setSelections] = useState<SceneSelection[]>([]);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  const selectionTokenRef = useRef<string | null>(null);
   const isUploading = useRef(false);
   const replacingId = useRef<string | null>(null);
   const replacementInput = useRef<HTMLInputElement>(null);
+
+  function invalidateSelections() {
+    selectionTokenRef.current = null;
+    setSelections([]);
+    setSelectionError(null);
+    setIsSelecting(false);
+  }
 
   function invalidateAnalysis() {
     analysisTokenRef.current = null;
     setAnalysis(null);
     setAnalysisError(null);
     setIsAnalyzing(false);
+    invalidateSelections();
   }
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -322,6 +421,7 @@ function App() {
       const parsed: unknown = JSON.parse(rawCompiledSet);
       validateCompiledPromptSet(parsed);
       setCompiledSet(parsed);
+      invalidateSelections();
       setRawCompiledSet('');
       setIsImportOpen(false);
     } catch (importFailure) {
@@ -336,6 +436,7 @@ function App() {
   async function analyzeLibrary() {
     if (references.length === 0) return;
 
+    invalidateSelections();
     const referenceSnapshot = [...references];
     const requestToken = crypto.randomUUID();
     analysisTokenRef.current = requestToken;
@@ -399,13 +500,103 @@ function App() {
     }
   }
 
+  async function selectReferences() {
+    if (!compiledSet || !analysis || isAnalyzing || isSelecting) return;
+
+    const sceneSnapshot = [...compiledSet.scenes];
+    const analysisSnapshot = {
+      ...analysis,
+      images: [...analysis.images],
+    };
+    const currentToken = crypto.randomUUID();
+    selectionTokenRef.current = currentToken;
+    setIsSelecting(true);
+    setSelectionError(null);
+
+    const requestBody = {
+      references: analysisSnapshot.images.map((image, inputIndex) => ({
+        inputIndex,
+        productDescription: compactText(image.productDescription, 60),
+        colorsAndVariants: compactText(image.colorsAndVariants, 40),
+        packagingAndAccessories: compactText(image.packagingAndAccessories, 45),
+        clutterAndWatermarks: compactText(image.clutterAndWatermarks, 35),
+        humanPresence: compactText(image.humanPresence, 35),
+        visualEvidence: compactText(image.visualEvidence, 60),
+      })),
+      scenes: sceneSnapshot.map((scene) => ({
+        sceneNumber: scene.sceneNumber,
+        productName: compactText(scene.inspectionMetadata.productName, 50),
+        sceneMode: scene.inspectionMetadata.sceneMode,
+        action: scene.inspectionMetadata.action,
+        cameraIntent: scene.inspectionMetadata.cameraIntent,
+        dialogue: compactText(scene.inspectionMetadata.dialogue, 60),
+      })),
+    };
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch('/api/select-references', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody),
+        });
+        const responseText = await response.text();
+
+        if (selectionTokenRef.current !== currentToken) return;
+
+        if (!response.ok) {
+          let message = `Reference selection failed with status ${response.status}.`;
+          try {
+            const errorBody: unknown = JSON.parse(responseText);
+            if (errorBody && typeof errorBody === 'object' &&
+                typeof (errorBody as Record<string, unknown>).error === 'string') {
+              message = (errorBody as Record<string, string>).error;
+            }
+          } catch {
+            // Keep the status-based message when the server error is not JSON.
+          }
+          throw new Error(message);
+        }
+
+        try {
+          const parsed: unknown = JSON.parse(responseText);
+          const validatedSelections = validateAndMapSelections(
+            parsed,
+            sceneSnapshot,
+            analysisSnapshot,
+          );
+          if (selectionTokenRef.current !== currentToken) return;
+          setSelections(validatedSelections);
+          return;
+        } catch (contractError) {
+          if (selectionTokenRef.current !== currentToken) return;
+          if (attempt === 0) continue;
+          throw contractError;
+        }
+      }
+    } catch (selectionFailure) {
+      if (selectionTokenRef.current === currentToken) {
+        setSelectionError(
+          selectionFailure instanceof Error
+            ? selectionFailure.message
+            : 'Reference selection failed.',
+        );
+      }
+    } finally {
+      if (selectionTokenRef.current === currentToken) {
+        setIsSelecting(false);
+      }
+    }
+  }
+
   const isReady = references.length >= 1 && references.length <= MAX_REFERENCES;
+  const canSelectReferences = Boolean(compiledSet && analysis && !isAnalyzing && !isSelecting);
 
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">MOCHI SCENES V4 · G0–G4</p>
+          <p className="eyebrow">MOCHI SCENES V4 · G0–G5</p>
           <h1>Local Reference Library</h1>
           <p className="subtitle">Prepare up to five local product references for future scene stages.</p>
         </div>
@@ -479,6 +670,7 @@ function App() {
 
       {error && <p className="error-message" role="alert">{error}</p>}
       {analysisError && <p className="error-message" role="alert">{analysisError}</p>}
+      {selectionError && <p className="error-message" role="alert">{selectionError}</p>}
 
       <input
         ref={replacementInput}
@@ -527,7 +719,19 @@ function App() {
               <p className="eyebrow">GLOBAL REFERENCE ANALYSIS</p>
               <h2 id="library-analysis-title">Library Analysis</h2>
             </div>
-            <span>{analysis.images.length} analyzed references</span>
+            <div className="section-actions">
+              <span>{analysis.images.length} analyzed references</span>
+              {compiledSet && (
+                <button
+                  className="primary-control"
+                  type="button"
+                  onClick={selectReferences}
+                  disabled={!canSelectReferences}
+                >
+                  {isSelecting ? 'Selecting references…' : 'Select References'}
+                </button>
+              )}
+            </div>
           </div>
 
           <p className="analysis-summary">{analysis.generalSummary}</p>
@@ -585,8 +789,13 @@ function App() {
           </div>
 
           <div className="scene-grid">
-            {compiledSet.scenes.map((scene) => (
-              <article className="scene-shell" key={scene.sceneNumber}>
+            {compiledSet.scenes.map((scene) => {
+              const selection = selections.find(
+                (candidate) => candidate.sceneNumber === scene.sceneNumber,
+              );
+
+              return (
+                <article className="scene-shell" key={scene.sceneNumber}>
                 <header className="scene-header">
                   <div>
                     <p className="scene-label">SCENE {scene.sceneNumber}</p>
@@ -620,6 +829,38 @@ function App() {
                   <p className="final-prompt">{scene.finalPrompt}</p>
                 </div>
 
+                <div className="scene-block matched-references">
+                  <div className="matched-heading">
+                    <h4>Matched References</h4>
+                    <span className={selection ? 'matched-status' : 'unmatched-status'}>
+                      {selection ? 'Matched' : 'No selection'}
+                    </span>
+                  </div>
+                  {selection && (
+                    <>
+                      <div className="matched-thumbnails">
+                        {selection.selectedLocalIds.map((localId) => {
+                          const reference = references.find((item) => item.id === localId);
+                          return (
+                            <figure key={localId}>
+                              {reference ? (
+                                <img
+                                  src={`data:${reference.mimeType};base64,${reference.base64}`}
+                                  alt={reference.name}
+                                />
+                              ) : (
+                                <div className="missing-thumbnail">Unavailable</div>
+                              )}
+                              <figcaption>{reference?.name ?? localId}</figcaption>
+                            </figure>
+                          );
+                        })}
+                      </div>
+                      <p className="selection-reason">{selection.reason}</p>
+                    </>
+                  )}
+                </div>
+
                 <div className="scene-block original-ids">
                   <h4>Original IDs</h4>
                   <dl>
@@ -637,8 +878,9 @@ function App() {
                     </div>
                   </dl>
                 </div>
-              </article>
-            ))}
+                </article>
+              );
+            })}
           </div>
         </section>
       )}
