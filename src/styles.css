@@ -595,6 +595,47 @@ button:disabled {
   letter-spacing: 0.05em;
 }
 
+.generation-ready {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  color: #86efac;
+  border: 1px solid #27553b;
+  border-radius: 8px;
+  background: #123323;
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.generation-package dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+}
+
+.generation-package dl > div {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #2c3641;
+  border-radius: 7px;
+  background: #11171d;
+}
+
+.generation-package dt {
+  color: #8290a1;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.generation-package dd {
+  margin: 4px 0 0;
+  color: #c9eefe;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .scene-metadata dd {
   color: #c9eefe;
   font-size: 0.78rem;

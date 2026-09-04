@@ -24,6 +24,15 @@ type PreparedScene = {
   preparedReferences: PreparedReference[];
 };
 
+type SceneGenerationPackage = {
+  sceneNumber: 1 | 2 | 3 | 4;
+  finalPrompt: string;
+  voiceGender: 'FEMALE' | 'MALE';
+  aspectRatio: '9:16';
+  durationSeconds: 8;
+  references: PreparedReference[];
+};
+
 function validateCompiledPromptSet(value: unknown): asserts value is CompiledPromptSetV2 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('CompiledPromptSetV2 must be a JSON object.');
@@ -387,15 +396,23 @@ function App() {
   const [isPreparing, setIsPreparing] = useState(false);
   const [preparationError, setPreparationError] = useState<string | null>(null);
   const preparationTokenRef = useRef<string | null>(null);
+  const [generationPackages, setGenerationPackages] = useState<SceneGenerationPackage[]>([]);
+  const [generationPackageError, setGenerationPackageError] = useState<string | null>(null);
   const isUploading = useRef(false);
   const replacingId = useRef<string | null>(null);
   const replacementInput = useRef<HTMLInputElement>(null);
+
+  function invalidateGenerationPackages() {
+    setGenerationPackages([]);
+    setGenerationPackageError(null);
+  }
 
   function invalidatePreparation() {
     preparationTokenRef.current = null;
     setPreparedScenes([]);
     setPreparationError(null);
     setIsPreparing(false);
+    invalidateGenerationPackages();
   }
 
   function invalidateSelections() {
@@ -663,6 +680,7 @@ function App() {
   }
 
   async function prepareReferences() {
+    invalidateGenerationPackages();
     if (!compiledSet || !analysis) {
       setPreparationError('Import prompts and analyze references before preparation.');
       return;
@@ -772,6 +790,98 @@ function App() {
     }
   }
 
+  function buildGenerationPackages() {
+    setGenerationPackageError(null);
+
+    try {
+      if (!compiledSet) throw new Error('Import CompiledPromptSetV2 before building packages.');
+      if (isAnalyzing || isSelecting || isPreparing) {
+        throw new Error('Wait for current reference processing to finish.');
+      }
+      if (compiledSet.scenes.length !== 4) {
+        throw new Error('Generation packages require exactly four compiled scenes.');
+      }
+      if (preparedScenes.length !== 4) {
+        throw new Error('Generation packages require exactly four prepared scenes.');
+      }
+
+      const compiledSceneNumbers = new Set<number>();
+      for (const scene of compiledSet.scenes) {
+        if (compiledSceneNumbers.has(scene.sceneNumber)) {
+          throw new Error(`Compiled scenes contain duplicate scene ${scene.sceneNumber}.`);
+        }
+        compiledSceneNumbers.add(scene.sceneNumber);
+      }
+
+      const preparedBySceneNumber = new Map<number, PreparedScene>();
+      for (const preparedScene of preparedScenes) {
+        if (preparedBySceneNumber.has(preparedScene.sceneNumber)) {
+          throw new Error(`Prepared scenes contain duplicate scene ${preparedScene.sceneNumber}.`);
+        }
+        if (preparedScene.preparedReferences.length === 0) {
+          throw new Error(`Prepared scene ${preparedScene.sceneNumber} has no references.`);
+        }
+
+        for (const reference of preparedScene.preparedReferences) {
+          if (typeof reference.localId !== 'string' || !reference.localId.trim()) {
+            throw new Error(`Prepared scene ${preparedScene.sceneNumber} has an invalid localId.`);
+          }
+          if (typeof reference.name !== 'string') {
+            throw new Error(`Prepared scene ${preparedScene.sceneNumber} has an invalid name.`);
+          }
+          if (typeof reference.mimeType !== 'string' || !reference.mimeType.startsWith('image/')) {
+            throw new Error(`Prepared scene ${preparedScene.sceneNumber} has an invalid mimeType.`);
+          }
+          if (typeof reference.base64 !== 'string' || !reference.base64.trim()) {
+            throw new Error(`Prepared scene ${preparedScene.sceneNumber} has empty image data.`);
+          }
+          if (reference.preparationMode !== 'REENCODED' &&
+              reference.preparationMode !== 'ORIGINAL_FALLBACK') {
+            throw new Error(`Prepared scene ${preparedScene.sceneNumber} has an invalid preparation mode.`);
+          }
+          if (typeof reference.clutterAndWatermarks !== 'string' ||
+              typeof reference.humanPresence !== 'string') {
+            throw new Error(`Prepared scene ${preparedScene.sceneNumber} has invalid evidence.`);
+          }
+        }
+
+        preparedBySceneNumber.set(preparedScene.sceneNumber, preparedScene);
+      }
+
+      for (const sceneNumber of [1, 2, 3, 4]) {
+        if (!compiledSceneNumbers.has(sceneNumber)) {
+          throw new Error(`Compiled scenes are missing scene ${sceneNumber}.`);
+        }
+        if (!preparedBySceneNumber.has(sceneNumber)) {
+          throw new Error(`Prepared scenes are missing scene ${sceneNumber}.`);
+        }
+      }
+
+      const nextPackages: SceneGenerationPackage[] = compiledSet.scenes.map((scene) => ({
+        sceneNumber: scene.sceneNumber,
+        finalPrompt: scene.finalPrompt,
+        voiceGender: compiledSet.voiceGender,
+        aspectRatio: '9:16',
+        durationSeconds: 8,
+        references: preparedBySceneNumber.get(scene.sceneNumber)!.preparedReferences.map(
+          (reference) => ({ ...reference }),
+        ),
+      }));
+
+      if (nextPackages.length !== 4) {
+        throw new Error('Generation package build did not produce exactly four packages.');
+      }
+      setGenerationPackages(nextPackages);
+    } catch (packageFailure) {
+      setGenerationPackages([]);
+      setGenerationPackageError(
+        packageFailure instanceof Error
+          ? packageFailure.message
+          : 'Generation package build failed.',
+      );
+    }
+  }
+
   const isReady = references.length >= 1 && references.length <= MAX_REFERENCES;
   const canSelectReferences = Boolean(compiledSet && analysis && !isAnalyzing && !isSelecting);
   const canPrepareReferences = Boolean(
@@ -782,12 +892,19 @@ function App() {
     !isSelecting &&
     !isPreparing,
   );
+  const canBuildGenerationPackages = Boolean(
+    compiledSet &&
+    preparedScenes.length === 4 &&
+    !isAnalyzing &&
+    !isSelecting &&
+    !isPreparing,
+  );
 
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">MOCHI SCENES V4 · G0–G6</p>
+          <p className="eyebrow">MOCHI SCENES V4 · G0–G7</p>
           <h1>Local Reference Library</h1>
           <p className="subtitle">Prepare up to five local product references for future scene stages.</p>
         </div>
@@ -863,6 +980,9 @@ function App() {
       {analysisError && <p className="error-message" role="alert">{analysisError}</p>}
       {selectionError && <p className="error-message" role="alert">{selectionError}</p>}
       {preparationError && <p className="error-message" role="alert">{preparationError}</p>}
+      {generationPackageError && (
+        <p className="error-message" role="alert">{generationPackageError}</p>
+      )}
 
       <input
         ref={replacementInput}
@@ -933,8 +1053,23 @@ function App() {
                   {isPreparing ? 'Preparing references…' : 'Prepare References'}
                 </button>
               )}
+              {selections.length === 4 && (
+                <button
+                  type="button"
+                  onClick={buildGenerationPackages}
+                  disabled={!canBuildGenerationPackages}
+                >
+                  Build Generation Packages
+                </button>
+              )}
             </div>
           </div>
+
+          {generationPackages.length === 4 && (
+            <p className="generation-ready" role="status">
+              Generation Packages Ready — 4 / 4
+            </p>
+          )}
 
           <p className="analysis-summary">{analysis.generalSummary}</p>
 
@@ -996,6 +1131,9 @@ function App() {
                 (candidate) => candidate.sceneNumber === scene.sceneNumber,
               );
               const preparedScene = preparedScenes.find(
+                (candidate) => candidate.sceneNumber === scene.sceneNumber,
+              );
+              const generationPackage = generationPackages.find(
                 (candidate) => candidate.sceneNumber === scene.sceneNumber,
               );
 
@@ -1082,6 +1220,35 @@ function App() {
                         </li>
                       ))}
                     </ul>
+                  )}
+                </div>
+
+                <div className="scene-block generation-package">
+                  <div className="matched-heading">
+                    <h4>Generation Package</h4>
+                    <span className={generationPackage ? 'matched-status' : 'unmatched-status'}>
+                      {generationPackage ? 'Ready' : 'Not ready'}
+                    </span>
+                  </div>
+                  {generationPackage && (
+                    <dl>
+                      <div>
+                        <dt>Frame</dt>
+                        <dd>{generationPackage.aspectRatio}</dd>
+                      </div>
+                      <div>
+                        <dt>Duration</dt>
+                        <dd>{generationPackage.durationSeconds} seconds</dd>
+                      </div>
+                      <div>
+                        <dt>Voice</dt>
+                        <dd>{generationPackage.voiceGender}</dd>
+                      </div>
+                      <div>
+                        <dt>References</dt>
+                        <dd>{generationPackage.references.length}</dd>
+                      </div>
+                    </dl>
                   )}
                 </div>
 
