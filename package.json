@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:server": "node server.mjs",
     "typecheck": "tsc --noEmit",
     "build": "tsc -b && vite build"
   },
   "dependencies": {
+    "@google/genai": "^2.21.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

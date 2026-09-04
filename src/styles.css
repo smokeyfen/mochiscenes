@@ -219,6 +219,17 @@ button:hover {
   background: #303d4a;
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.intake-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .primary-control input,
 .visually-hidden {
   position: absolute;
@@ -324,6 +335,62 @@ button:hover {
 
 .compiled-scenes {
   margin-top: 40px;
+}
+
+.library-analysis {
+  margin-top: 40px;
+}
+
+.analysis-summary {
+  margin-bottom: 16px;
+  padding: 16px;
+  color: #cdd7e2;
+  border: 1px solid #303a46;
+  border-radius: 10px;
+  background: #171d24;
+  line-height: 1.6;
+}
+
+.analysis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.analysis-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid #303a46;
+  border-radius: 14px;
+  background: #171d24;
+}
+
+.analysis-card h3 {
+  overflow: hidden;
+  margin: 0;
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-fields {
+  display: grid;
+  gap: 14px;
+  margin: 20px 0 0;
+}
+
+.analysis-fields dt {
+  color: #8290a1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.analysis-fields dd {
+  margin: 5px 0 0;
+  color: #cdd7e2;
+  line-height: 1.5;
 }
 
 .section-heading,
@@ -480,6 +547,15 @@ button:hover {
 
   .primary-control {
     text-align: center;
+  }
+
+  .intake-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .analysis-grid {
+    grid-template-columns: 1fr;
   }
 
   .scene-grid {

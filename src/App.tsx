@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import type { CompiledPromptSetV2, ReferenceImage } from './types';
+import type { CompiledPromptSetV2, LibraryAnalysis, ReferenceImage } from './types';
 
 const MAX_REFERENCES = 5;
 
@@ -100,6 +100,98 @@ function validateCompiledPromptSet(value: unknown): asserts value is CompiledPro
   }
 }
 
+function validateAndMapAnalysis(
+  value: unknown,
+  referenceSnapshot: readonly ReferenceImage[],
+): LibraryAnalysis {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Analysis response must be a JSON object.');
+  }
+
+  const response = value as Record<string, unknown>;
+  if (Object.keys(response).length !== 2 ||
+      !Object.hasOwn(response, 'generalSummary') ||
+      !Object.hasOwn(response, 'analyses')) {
+    throw new Error('Analysis response must contain only generalSummary and analyses.');
+  }
+  if (typeof response.generalSummary !== 'string') {
+    throw new Error('Analysis generalSummary must be a string.');
+  }
+  if (!Array.isArray(response.analyses) || response.analyses.length !== referenceSnapshot.length) {
+    throw new Error(`Analysis response must contain exactly ${referenceSnapshot.length} items.`);
+  }
+
+  const textFields = [
+    'productDescription',
+    'colorsAndVariants',
+    'packagingAndAccessories',
+    'clutterAndWatermarks',
+    'humanPresence',
+    'visualEvidence',
+  ] as const;
+  const seenIndices = new Set<number>();
+  const validatedAnalyses = response.analyses.map((itemValue, itemPosition) => {
+    const label = `analyses[${itemPosition}]`;
+    if (!itemValue || typeof itemValue !== 'object' || Array.isArray(itemValue)) {
+      throw new Error(`${label} must be an object.`);
+    }
+
+    const item = itemValue as Record<string, unknown>;
+    if (Object.keys(item).length !== textFields.length + 1 ||
+        !Object.hasOwn(item, 'inputIndex') ||
+        !textFields.every((field) => Object.hasOwn(item, field))) {
+      throw new Error(`${label} contains missing or unsupported fields.`);
+    }
+    if (!Number.isInteger(item.inputIndex)) {
+      throw new Error(`${label}.inputIndex must be an integer.`);
+    }
+
+    const inputIndex = item.inputIndex as number;
+    if (inputIndex < 0 || inputIndex >= referenceSnapshot.length) {
+      throw new Error(`${label}.inputIndex is outside the reference snapshot.`);
+    }
+    if (seenIndices.has(inputIndex)) {
+      throw new Error(`Analysis response contains duplicate inputIndex ${inputIndex}.`);
+    }
+    seenIndices.add(inputIndex);
+
+    for (const field of textFields) {
+      if (typeof item[field] !== 'string' || !item[field].trim()) {
+        throw new Error(`${label}.${field} must be a non-empty string.`);
+      }
+    }
+
+    return {
+      inputIndex,
+      productDescription: item.productDescription as string,
+      colorsAndVariants: item.colorsAndVariants as string,
+      packagingAndAccessories: item.packagingAndAccessories as string,
+      clutterAndWatermarks: item.clutterAndWatermarks as string,
+      humanPresence: item.humanPresence as string,
+      visualEvidence: item.visualEvidence as string,
+    };
+  });
+
+  for (let inputIndex = 0; inputIndex < referenceSnapshot.length; inputIndex += 1) {
+    if (!seenIndices.has(inputIndex)) {
+      throw new Error(`Analysis response is missing inputIndex ${inputIndex}.`);
+    }
+  }
+
+  return {
+    generalSummary: response.generalSummary,
+    images: validatedAnalyses.map((item) => ({
+      id: referenceSnapshot[item.inputIndex].id,
+      productDescription: item.productDescription,
+      colorsAndVariants: item.colorsAndVariants,
+      packagingAndAccessories: item.packagingAndAccessories,
+      clutterAndWatermarks: item.clutterAndWatermarks,
+      humanPresence: item.humanPresence,
+      visualEvidence: item.visualEvidence,
+    })),
+  };
+}
+
 function readReference(file: File): Promise<ReferenceImage> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -136,9 +228,20 @@ function App() {
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [rawCompiledSet, setRawCompiledSet] = useState('');
   const [importError, setImportError] = useState('');
+  const [analysis, setAnalysis] = useState<LibraryAnalysis | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const analysisTokenRef = useRef<string | null>(null);
   const isUploading = useRef(false);
   const replacingId = useRef<string | null>(null);
   const replacementInput = useRef<HTMLInputElement>(null);
+
+  function invalidateAnalysis() {
+    analysisTokenRef.current = null;
+    setAnalysis(null);
+    setAnalysisError(null);
+    setIsAnalyzing(false);
+  }
 
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
@@ -161,6 +264,7 @@ function App() {
     try {
       const uploadedReferences = await Promise.all(files.map(readReference));
       setReferences((current) => [...current, ...uploadedReferences]);
+      invalidateAnalysis();
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : 'Could not read the selected images.');
     } finally {
@@ -170,6 +274,7 @@ function App() {
 
   function handleDelete(id: string) {
     setReferences((current) => current.filter((reference) => reference.id !== id));
+    invalidateAnalysis();
   }
 
   function openReplacementPicker(id: string) {
@@ -191,6 +296,7 @@ function App() {
       setReferences((current) =>
         current.map((reference) => reference.id === targetId ? replacement : reference),
       );
+      invalidateAnalysis();
     } catch (replaceError) {
       setError(replaceError instanceof Error ? replaceError.message : 'Could not read the selected image.');
     }
@@ -227,13 +333,79 @@ function App() {
     }
   }
 
+  async function analyzeLibrary() {
+    if (references.length === 0) return;
+
+    const referenceSnapshot = [...references];
+    const requestToken = crypto.randomUUID();
+    analysisTokenRef.current = requestToken;
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch('/api/analyze-library', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            images: referenceSnapshot.map((reference) => ({
+              base64: reference.base64,
+              mimeType: reference.mimeType,
+            })),
+          }),
+        });
+        const responseText = await response.text();
+
+        if (analysisTokenRef.current !== requestToken) return;
+
+        if (!response.ok) {
+          let message = `Library analysis failed with status ${response.status}.`;
+          try {
+            const errorBody: unknown = JSON.parse(responseText);
+            if (errorBody && typeof errorBody === 'object' &&
+                typeof (errorBody as Record<string, unknown>).error === 'string') {
+              message = (errorBody as Record<string, string>).error;
+            }
+          } catch {
+            // Keep the status-based message when the server error is not JSON.
+          }
+          throw new Error(message);
+        }
+
+        try {
+          const parsed: unknown = JSON.parse(responseText);
+          const validatedAnalysis = validateAndMapAnalysis(parsed, referenceSnapshot);
+          if (analysisTokenRef.current !== requestToken) return;
+          setAnalysis(validatedAnalysis);
+          return;
+        } catch (contractError) {
+          if (analysisTokenRef.current !== requestToken) return;
+          if (attempt === 0) continue;
+          throw contractError;
+        }
+      }
+    } catch (analysisFailure) {
+      if (analysisTokenRef.current === requestToken) {
+        setAnalysisError(
+          analysisFailure instanceof Error
+            ? analysisFailure.message
+            : 'Library analysis failed.',
+        );
+      }
+    } finally {
+      if (analysisTokenRef.current === requestToken) {
+        setIsAnalyzing(false);
+      }
+    }
+  }
+
   const isReady = references.length >= 1 && references.length <= MAX_REFERENCES;
 
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">MOCHI SCENES V4 · G0/G1/G2</p>
+          <p className="eyebrow">MOCHI SCENES V4 · G0–G4</p>
           <h1>Local Reference Library</h1>
           <p className="subtitle">Prepare up to five local product references for future scene stages.</p>
         </div>
@@ -292,13 +464,21 @@ function App() {
           <h2 id="intake-title">Reference intake</h2>
           <p>Select one or multiple image files. Images stay in this browser session.</p>
         </div>
-        <label className="primary-control">
-          Upload images
-          <input type="file" accept="image/*" multiple onChange={handleUpload} />
-        </label>
+        <div className="intake-actions">
+          {references.length > 0 && (
+            <button type="button" onClick={analyzeLibrary} disabled={isAnalyzing}>
+              {isAnalyzing ? 'Analyzing library…' : 'Analyze Library'}
+            </button>
+          )}
+          <label className="primary-control">
+            Upload images
+            <input type="file" accept="image/*" multiple onChange={handleUpload} />
+          </label>
+        </div>
       </section>
 
       {error && <p className="error-message" role="alert">{error}</p>}
+      {analysisError && <p className="error-message" role="alert">{analysisError}</p>}
 
       <input
         ref={replacementInput}
@@ -337,6 +517,60 @@ function App() {
               </div>
             </article>
           ))}
+        </section>
+      )}
+
+      {analysis && (
+        <section className="library-analysis" aria-labelledby="library-analysis-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">GLOBAL REFERENCE ANALYSIS</p>
+              <h2 id="library-analysis-title">Library Analysis</h2>
+            </div>
+            <span>{analysis.images.length} analyzed references</span>
+          </div>
+
+          <p className="analysis-summary">{analysis.generalSummary}</p>
+
+          <div className="analysis-grid">
+            {analysis.images.map((image) => (
+              <article className="analysis-card" key={image.id}>
+                <header>
+                  <p className="reference-label">LOCAL REFERENCE</p>
+                  <h3>
+                    {references.find((reference) => reference.id === image.id)?.name
+                      ?? 'Reference unavailable'}
+                  </h3>
+                </header>
+                <dl className="analysis-fields">
+                  <div>
+                    <dt>Product</dt>
+                    <dd>{image.productDescription}</dd>
+                  </div>
+                  <div>
+                    <dt>Colors & variants</dt>
+                    <dd>{image.colorsAndVariants}</dd>
+                  </div>
+                  <div>
+                    <dt>Packaging & accessories</dt>
+                    <dd>{image.packagingAndAccessories}</dd>
+                  </div>
+                  <div>
+                    <dt>Clutter & watermarks</dt>
+                    <dd>{image.clutterAndWatermarks}</dd>
+                  </div>
+                  <div>
+                    <dt>Human presence</dt>
+                    <dd>{image.humanPresence}</dd>
+                  </div>
+                  <div>
+                    <dt>Visual evidence</dt>
+                    <dd>{image.visualEvidence}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+          </div>
         </section>
       )}
 
