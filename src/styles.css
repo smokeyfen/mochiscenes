@@ -17,7 +17,8 @@ body {
 }
 
 button,
-input {
+input,
+textarea {
   font: inherit;
 }
 
@@ -105,15 +106,77 @@ p {
   color: #94a3b8;
 }
 
+.import-panel,
+.intake-panel {
+  display: flex;
+  padding: 24px;
+  border: 1px solid #303a46;
+  border-radius: 16px;
+  background: #171d24;
+}
+
+.import-panel {
+  flex-direction: column;
+  margin-bottom: 16px;
+}
+
+.import-heading,
 .intake-panel {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 24px;
-  border: 1px solid #303a46;
-  border-radius: 16px;
-  background: #171d24;
+}
+
+.import-heading p {
+  margin-bottom: 0;
+  color: #94a3b8;
+}
+
+.imported-summary span {
+  display: block;
+  overflow: hidden;
+  max-width: 520px;
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.import-form label {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.import-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #3a4654;
+  border-radius: 10px;
+  padding: 14px;
+  color: #dce7f2;
+  background: #0d1217;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.5;
+}
+
+.import-form textarea:focus {
+  outline: 2px solid #67d5ff;
+  outline-offset: 1px;
+}
+
+.import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .intake-panel h2 {
@@ -265,6 +328,7 @@ button:hover {
   }
 
   .app-header,
+  .import-heading,
   .intake-panel {
     align-items: stretch;
     flex-direction: column;
@@ -278,4 +342,3 @@ button:hover {
     text-align: center;
   }
 }
-

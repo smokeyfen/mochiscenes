@@ -1,7 +1,104 @@
-import { useRef, useState, type ChangeEvent } from 'react';
-import type { ReferenceImage } from './types';
+import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import type { CompiledPromptSetV2, ReferenceImage } from './types';
 
 const MAX_REFERENCES = 5;
+
+function validateCompiledPromptSet(value: unknown): asserts value is CompiledPromptSetV2 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('CompiledPromptSetV2 must be a JSON object.');
+  }
+
+  const compiledSet = value as Record<string, unknown>;
+
+  if (compiledSet.compilerVersion !== 1) {
+    throw new Error('compilerVersion must be the numeric literal 1.');
+  }
+  if (typeof compiledSet.sourceFingerprint !== 'string' || !compiledSet.sourceFingerprint.trim()) {
+    throw new Error('sourceFingerprint must be a non-empty string.');
+  }
+  if (compiledSet.voiceGender !== 'FEMALE' && compiledSet.voiceGender !== 'MALE') {
+    throw new Error('voiceGender must be exactly FEMALE or MALE.');
+  }
+  if (!Array.isArray(compiledSet.scenes) || compiledSet.scenes.length !== 4) {
+    throw new Error('scenes must contain exactly 4 entries.');
+  }
+
+  const sceneNumbers = new Set<number>();
+  const sceneModes = new Set(['PRESENTATION', 'DEMONSTRATION']);
+  const sceneActions = new Set([
+    'PRESENT',
+    'MOVE',
+    'REORIENT',
+    'PRESS_RELEASE',
+    'OPEN',
+    'CLOSE',
+    'CONNECT',
+    'DISCONNECT',
+    'REMOVE',
+  ]);
+  const cameraIntents = new Set([
+    'OVERVIEW_REVEAL',
+    'ACTION_READABILITY',
+    'DETAIL_INSPECTION',
+    'PRODUCT_PRESENTATION',
+  ]);
+
+  compiledSet.scenes.forEach((sceneValue, index) => {
+    const label = `scenes[${index}]`;
+    if (!sceneValue || typeof sceneValue !== 'object' || Array.isArray(sceneValue)) {
+      throw new Error(`${label} must be an object.`);
+    }
+
+    const scene = sceneValue as Record<string, unknown>;
+    if (!Number.isInteger(scene.sceneNumber) || ![1, 2, 3, 4].includes(scene.sceneNumber as number)) {
+      throw new Error(`${label}.sceneNumber must be an integer from 1 to 4.`);
+    }
+    if (sceneNumbers.has(scene.sceneNumber as number)) {
+      throw new Error('scenes must contain sceneNumber 1, 2, 3 and 4 exactly once.');
+    }
+    sceneNumbers.add(scene.sceneNumber as number);
+
+    if (typeof scene.finalPrompt !== 'string' || !scene.finalPrompt.trim()) {
+      throw new Error(`${label}.finalPrompt must be a non-empty string.`);
+    }
+    if (typeof scene.characterCount !== 'number' || !Number.isFinite(scene.characterCount)) {
+      throw new Error(`${label}.characterCount must be a finite number.`);
+    }
+    if (typeof scene.primaryReferenceId !== 'string' || !scene.primaryReferenceId.trim()) {
+      throw new Error(`${label}.primaryReferenceId must be a non-empty string.`);
+    }
+    if (!Array.isArray(scene.supportingReferenceIds) ||
+        !scene.supportingReferenceIds.every((id) => typeof id === 'string')) {
+      throw new Error(`${label}.supportingReferenceIds must be an array of strings.`);
+    }
+    if (!scene.inspectionMetadata ||
+        typeof scene.inspectionMetadata !== 'object' ||
+        Array.isArray(scene.inspectionMetadata)) {
+      throw new Error(`${label}.inspectionMetadata must be an object.`);
+    }
+
+    const metadata = scene.inspectionMetadata as Record<string, unknown>;
+    if (typeof metadata.productName !== 'string' || !metadata.productName.trim()) {
+      throw new Error(`${label}.inspectionMetadata.productName must be a non-empty string.`);
+    }
+    if (typeof metadata.sceneMode !== 'string' || !sceneModes.has(metadata.sceneMode)) {
+      throw new Error(`${label}.inspectionMetadata.sceneMode is invalid.`);
+    }
+    if (typeof metadata.action !== 'string' || !sceneActions.has(metadata.action)) {
+      throw new Error(`${label}.inspectionMetadata.action is invalid.`);
+    }
+    if (typeof metadata.dialogue !== 'string') {
+      throw new Error(`${label}.inspectionMetadata.dialogue must be a string.`);
+    }
+    if (typeof metadata.cameraIntent !== 'string' || !cameraIntents.has(metadata.cameraIntent)) {
+      throw new Error(`${label}.inspectionMetadata.cameraIntent is invalid.`);
+    }
+  });
+
+  if (sceneNumbers.size !== 4) {
+    throw new Error('scenes must contain sceneNumber 1, 2, 3 and 4 exactly once.');
+  }
+}
 
 function readReference(file: File): Promise<ReferenceImage> {
   return new Promise((resolve, reject) => {
@@ -35,6 +132,10 @@ function readReference(file: File): Promise<ReferenceImage> {
 function App() {
   const [references, setReferences] = useState<ReferenceImage[]>([]);
   const [error, setError] = useState('');
+  const [compiledSet, setCompiledSet] = useState<CompiledPromptSetV2 | null>(null);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [rawCompiledSet, setRawCompiledSet] = useState('');
+  const [importError, setImportError] = useState('');
   const isUploading = useRef(false);
   const replacingId = useRef<string | null>(null);
   const replacementInput = useRef<HTMLInputElement>(null);
@@ -95,13 +196,44 @@ function App() {
     }
   }
 
+  function openImport() {
+    setRawCompiledSet('');
+    setImportError('');
+    setIsImportOpen(true);
+  }
+
+  function cancelImport() {
+    setRawCompiledSet('');
+    setImportError('');
+    setIsImportOpen(false);
+  }
+
+  function confirmImport(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setImportError('');
+
+    try {
+      const parsed: unknown = JSON.parse(rawCompiledSet);
+      validateCompiledPromptSet(parsed);
+      setCompiledSet(parsed);
+      setRawCompiledSet('');
+      setIsImportOpen(false);
+    } catch (importFailure) {
+      setImportError(
+        importFailure instanceof Error
+          ? importFailure.message
+          : 'Could not import CompiledPromptSetV2.',
+      );
+    }
+  }
+
   const isReady = references.length >= 1 && references.length <= MAX_REFERENCES;
 
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">MOCHI SCENES V4 · G0/G1</p>
+          <p className="eyebrow">MOCHI SCENES V4 · G0/G1/G2</p>
           <h1>Local Reference Library</h1>
           <p className="subtitle">Prepare up to five local product references for future scene stages.</p>
         </div>
@@ -113,6 +245,47 @@ function App() {
           </div>
         </div>
       </header>
+
+      <section className="import-panel" aria-labelledby="import-title">
+        <div className="import-heading">
+          <div>
+            <h2 id="import-title">CompiledPromptSetV2</h2>
+            {compiledSet ? (
+              <p className="imported-summary">
+                Imported · {compiledSet.scenes.length} scenes · {compiledSet.voiceGender}
+                <span title={compiledSet.sourceFingerprint}>{compiledSet.sourceFingerprint}</span>
+              </p>
+            ) : (
+              <p>No compiled prompt set imported.</p>
+            )}
+          </div>
+          {!isImportOpen && (
+            <button className="primary-control" type="button" onClick={openImport}>
+              {compiledSet ? 'Replace import' : 'Import CompiledPromptSetV2'}
+            </button>
+          )}
+        </div>
+
+        {isImportOpen && (
+          <form className="import-form" onSubmit={confirmImport}>
+            <label htmlFor="compiled-set-json">Paste raw CompiledPromptSetV2 JSON</label>
+            <textarea
+              id="compiled-set-json"
+              value={rawCompiledSet}
+              onChange={(event) => setRawCompiledSet(event.target.value)}
+              placeholder="{ &quot;compilerVersion&quot;: 1, ... }"
+              rows={12}
+              spellCheck={false}
+              autoFocus
+            />
+            {importError && <p className="error-message" role="alert">{importError}</p>}
+            <div className="import-actions">
+              <button type="button" onClick={cancelImport}>Cancel</button>
+              <button className="primary-control" type="submit">Confirm import</button>
+            </div>
+          </form>
+        )}
+      </section>
 
       <section className="intake-panel" aria-labelledby="intake-title">
         <div>
