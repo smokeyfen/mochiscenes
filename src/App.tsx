@@ -9,6 +9,21 @@ import type {
 
 const MAX_REFERENCES = 5;
 
+type PreparedReference = {
+  localId: string;
+  name: string;
+  mimeType: string;
+  base64: string;
+  preparationMode: 'REENCODED' | 'ORIGINAL_FALLBACK';
+  clutterAndWatermarks: string;
+  humanPresence: string;
+};
+
+type PreparedScene = {
+  sceneNumber: 1 | 2 | 3 | 4;
+  preparedReferences: PreparedReference[];
+};
+
 function validateCompiledPromptSet(value: unknown): asserts value is CompiledPromptSetV2 {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('CompiledPromptSetV2 must be a JSON object.');
@@ -308,6 +323,51 @@ function readReference(file: File): Promise<ReferenceImage> {
   });
 }
 
+async function reencodeReference(reference: ReferenceImage) {
+  try {
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('Image decoding failed.'));
+      image.src = `data:${reference.mimeType};base64,${reference.base64}`;
+    });
+
+    if (image.naturalWidth === 0 || image.naturalHeight === 0) {
+      throw new Error('Image has zero dimensions.');
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Canvas is unavailable.');
+
+    context.drawImage(image, 0, 0);
+
+    const outputMimeType = reference.mimeType === 'image/png'
+      ? 'image/png'
+      : reference.mimeType === 'image/webp'
+        ? 'image/webp'
+        : 'image/jpeg';
+    const dataUrl = outputMimeType === 'image/png'
+      ? canvas.toDataURL(outputMimeType)
+      : canvas.toDataURL(outputMimeType, 0.95);
+    const prefix = `data:${outputMimeType};base64,`;
+    if (!dataUrl.startsWith(prefix)) throw new Error('Image encoding failed.');
+
+    const base64 = dataUrl.slice(prefix.length);
+    if (!base64) throw new Error('Encoded image is empty.');
+
+    return { base64, mimeType: outputMimeType, preparationMode: 'REENCODED' as const };
+  } catch {
+    return {
+      base64: reference.base64,
+      mimeType: reference.mimeType,
+      preparationMode: 'ORIGINAL_FALLBACK' as const,
+    };
+  }
+}
+
 function App() {
   const [references, setReferences] = useState<ReferenceImage[]>([]);
   const [error, setError] = useState('');
@@ -323,15 +383,27 @@ function App() {
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const selectionTokenRef = useRef<string | null>(null);
+  const [preparedScenes, setPreparedScenes] = useState<PreparedScene[]>([]);
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [preparationError, setPreparationError] = useState<string | null>(null);
+  const preparationTokenRef = useRef<string | null>(null);
   const isUploading = useRef(false);
   const replacingId = useRef<string | null>(null);
   const replacementInput = useRef<HTMLInputElement>(null);
+
+  function invalidatePreparation() {
+    preparationTokenRef.current = null;
+    setPreparedScenes([]);
+    setPreparationError(null);
+    setIsPreparing(false);
+  }
 
   function invalidateSelections() {
     selectionTokenRef.current = null;
     setSelections([]);
     setSelectionError(null);
     setIsSelecting(false);
+    invalidatePreparation();
   }
 
   function invalidateAnalysis() {
@@ -503,6 +575,7 @@ function App() {
   async function selectReferences() {
     if (!compiledSet || !analysis || isAnalyzing || isSelecting) return;
 
+    invalidatePreparation();
     const sceneSnapshot = [...compiledSet.scenes];
     const analysisSnapshot = {
       ...analysis,
@@ -589,14 +662,132 @@ function App() {
     }
   }
 
+  async function prepareReferences() {
+    if (!compiledSet || !analysis) {
+      setPreparationError('Import prompts and analyze references before preparation.');
+      return;
+    }
+
+    const referenceSnapshot = [...references];
+    const analysisSnapshot = { ...analysis, images: [...analysis.images] };
+    const selectionSnapshot = selections.map((selection) => ({
+      ...selection,
+      selectedLocalIds: [...selection.selectedLocalIds],
+    }));
+    const referenceIds = new Set(referenceSnapshot.map((reference) => reference.id));
+    const analysisIds = new Set(analysisSnapshot.images.map((image) => image.id));
+    const sceneNumbers = new Set<number>();
+
+    try {
+      if (selectionSnapshot.length !== 4) {
+        throw new Error('Preparation requires exactly four scene selections.');
+      }
+      for (const selection of selectionSnapshot) {
+        if (sceneNumbers.has(selection.sceneNumber)) {
+          throw new Error(`Preparation contains duplicate scene ${selection.sceneNumber}.`);
+        }
+        sceneNumbers.add(selection.sceneNumber);
+        if (selection.selectedLocalIds.length === 0) {
+          throw new Error(`Scene ${selection.sceneNumber} requires at least one selected reference.`);
+        }
+        for (const localId of selection.selectedLocalIds) {
+          if (!referenceIds.has(localId)) {
+            throw new Error(`Scene ${selection.sceneNumber} references a missing local image.`);
+          }
+          if (!analysisIds.has(localId)) {
+            throw new Error(`Scene ${selection.sceneNumber} references a missing image analysis.`);
+          }
+        }
+      }
+      for (const sceneNumber of [1, 2, 3, 4]) {
+        if (!sceneNumbers.has(sceneNumber)) {
+          throw new Error(`Preparation is missing scene ${sceneNumber}.`);
+        }
+      }
+    } catch (coherenceError) {
+      preparationTokenRef.current = null;
+      setPreparedScenes([]);
+      setIsPreparing(false);
+      setPreparationError(
+        coherenceError instanceof Error ? coherenceError.message : 'Preparation input is invalid.',
+      );
+      return;
+    }
+
+    const currentToken = crypto.randomUUID();
+    preparationTokenRef.current = currentToken;
+    setPreparedScenes([]);
+    setIsPreparing(true);
+    setPreparationError(null);
+
+    const uniqueLocalIds: string[] = [];
+    const seenLocalIds = new Set<string>();
+    for (const selection of selectionSnapshot) {
+      for (const localId of selection.selectedLocalIds) {
+        if (!seenLocalIds.has(localId)) {
+          seenLocalIds.add(localId);
+          uniqueLocalIds.push(localId);
+        }
+      }
+    }
+
+    try {
+      const preparedEntries = await Promise.all(uniqueLocalIds.map(async (localId) => {
+        const reference = referenceSnapshot.find((item) => item.id === localId)!;
+        const imageAnalysis = analysisSnapshot.images.find((item) => item.id === localId)!;
+        const encoded = await reencodeReference(reference);
+        return {
+          localId,
+          name: reference.name,
+          ...encoded,
+          clutterAndWatermarks: imageAnalysis.clutterAndWatermarks,
+          humanPresence: imageAnalysis.humanPresence,
+        };
+      }));
+
+      if (preparationTokenRef.current !== currentToken) return;
+
+      const preparedByLocalId = new Map(
+        preparedEntries.map((preparedReference) => [preparedReference.localId, preparedReference]),
+      );
+      setPreparedScenes(selectionSnapshot.map((selection) => ({
+        sceneNumber: selection.sceneNumber,
+        preparedReferences: selection.selectedLocalIds.map(
+          (localId) => preparedByLocalId.get(localId)!,
+        ),
+      })));
+    } catch (preparationFailure) {
+      if (preparationTokenRef.current === currentToken) {
+        setPreparedScenes([]);
+        setPreparationError(
+          preparationFailure instanceof Error
+            ? preparationFailure.message
+            : 'Reference preparation failed.',
+        );
+      }
+    } finally {
+      if (preparationTokenRef.current === currentToken) {
+        setIsPreparing(false);
+      }
+    }
+  }
+
   const isReady = references.length >= 1 && references.length <= MAX_REFERENCES;
   const canSelectReferences = Boolean(compiledSet && analysis && !isAnalyzing && !isSelecting);
+  const canPrepareReferences = Boolean(
+    compiledSet &&
+    analysis &&
+    selections.length === 4 &&
+    !isAnalyzing &&
+    !isSelecting &&
+    !isPreparing,
+  );
 
   return (
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">MOCHI SCENES V4 · G0–G5</p>
+          <p className="eyebrow">MOCHI SCENES V4 · G0–G6</p>
           <h1>Local Reference Library</h1>
           <p className="subtitle">Prepare up to five local product references for future scene stages.</p>
         </div>
@@ -671,6 +862,7 @@ function App() {
       {error && <p className="error-message" role="alert">{error}</p>}
       {analysisError && <p className="error-message" role="alert">{analysisError}</p>}
       {selectionError && <p className="error-message" role="alert">{selectionError}</p>}
+      {preparationError && <p className="error-message" role="alert">{preparationError}</p>}
 
       <input
         ref={replacementInput}
@@ -729,6 +921,16 @@ function App() {
                   disabled={!canSelectReferences}
                 >
                   {isSelecting ? 'Selecting references…' : 'Select References'}
+                </button>
+              )}
+              {selections.length === 4 && (
+                <button
+                  className="primary-control"
+                  type="button"
+                  onClick={prepareReferences}
+                  disabled={!canPrepareReferences}
+                >
+                  {isPreparing ? 'Preparing references…' : 'Prepare References'}
                 </button>
               )}
             </div>
@@ -791,6 +993,9 @@ function App() {
           <div className="scene-grid">
             {compiledSet.scenes.map((scene) => {
               const selection = selections.find(
+                (candidate) => candidate.sceneNumber === scene.sceneNumber,
+              );
+              const preparedScene = preparedScenes.find(
                 (candidate) => candidate.sceneNumber === scene.sceneNumber,
               );
 
@@ -858,6 +1063,25 @@ function App() {
                       </div>
                       <p className="selection-reason">{selection.reason}</p>
                     </>
+                  )}
+                </div>
+
+                <div className="scene-block prepared-references">
+                  <div className="matched-heading">
+                    <h4>Prepared References</h4>
+                    <span className={preparedScene ? 'matched-status' : 'unmatched-status'}>
+                      {preparedScene ? 'Prepared' : 'Not prepared'}
+                    </span>
+                  </div>
+                  {preparedScene && (
+                    <ul>
+                      {preparedScene.preparedReferences.map((preparedReference) => (
+                        <li key={preparedReference.localId}>
+                          <span>{preparedReference.name}</span>
+                          <strong>{preparedReference.preparationMode}</strong>
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
 

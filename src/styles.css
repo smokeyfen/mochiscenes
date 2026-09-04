@@ -561,6 +561,40 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.prepared-references ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.prepared-references li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #2c3641;
+  border-radius: 7px;
+  background: #11171d;
+}
+
+.prepared-references li span {
+  overflow: hidden;
+  color: #cdd7e2;
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prepared-references li strong {
+  flex: 0 0 auto;
+  color: #86efac;
+  font-size: 0.66rem;
+  letter-spacing: 0.05em;
+}
+
 .scene-metadata dd {
   color: #c9eefe;
   font-size: 0.78rem;
