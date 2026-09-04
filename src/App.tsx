@@ -339,6 +339,75 @@ function App() {
           ))}
         </section>
       )}
+
+      {compiledSet && (
+        <section className="compiled-scenes" aria-labelledby="compiled-scenes-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">IMPORTED OUTPUT</p>
+              <h2 id="compiled-scenes-title">Compiled Scenes</h2>
+            </div>
+            <span>{compiledSet.scenes.length} scene shells</span>
+          </div>
+
+          <div className="scene-grid">
+            {compiledSet.scenes.map((scene) => (
+              <article className="scene-shell" key={scene.sceneNumber}>
+                <header className="scene-header">
+                  <div>
+                    <p className="scene-label">SCENE {scene.sceneNumber}</p>
+                    <h3>{scene.inspectionMetadata.productName}</h3>
+                  </div>
+                  <span>{scene.characterCount} characters</span>
+                </header>
+
+                <dl className="scene-metadata">
+                  <div>
+                    <dt>Mode</dt>
+                    <dd>{scene.inspectionMetadata.sceneMode}</dd>
+                  </div>
+                  <div>
+                    <dt>Action</dt>
+                    <dd>{scene.inspectionMetadata.action}</dd>
+                  </div>
+                  <div>
+                    <dt>Camera</dt>
+                    <dd>{scene.inspectionMetadata.cameraIntent}</dd>
+                  </div>
+                </dl>
+
+                <div className="scene-block">
+                  <h4>Dialogue</h4>
+                  <p>{scene.inspectionMetadata.dialogue}</p>
+                </div>
+
+                <div className="scene-block">
+                  <h4>Final prompt</h4>
+                  <p className="final-prompt">{scene.finalPrompt}</p>
+                </div>
+
+                <div className="scene-block original-ids">
+                  <h4>Original IDs</h4>
+                  <dl>
+                    <div>
+                      <dt>Primary</dt>
+                      <dd>{scene.primaryReferenceId}</dd>
+                    </div>
+                    <div>
+                      <dt>Supporting</dt>
+                      <dd>
+                        {scene.supportingReferenceIds.length > 0
+                          ? scene.supportingReferenceIds.join(', ')
+                          : 'None'}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }

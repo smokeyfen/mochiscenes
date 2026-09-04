@@ -322,6 +322,146 @@ button:hover {
   color: #fecaca;
 }
 
+.compiled-scenes {
+  margin-top: 40px;
+}
+
+.section-heading,
+.scene-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.section-heading {
+  align-items: flex-end;
+  margin-bottom: 16px;
+}
+
+.section-heading h2,
+.scene-header h3 {
+  margin: 0;
+}
+
+.section-heading > span,
+.scene-header > span {
+  flex: 0 0 auto;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.scene-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.scene-shell {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid #303a46;
+  border-radius: 14px;
+  background: #171d24;
+}
+
+.scene-label {
+  margin-bottom: 6px;
+  color: #79d8ff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+}
+
+.scene-header h3 {
+  font-size: 1.05rem;
+  line-height: 1.4;
+}
+
+.scene-metadata {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 20px 0;
+}
+
+.scene-metadata > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #2c3641;
+  border-radius: 8px;
+  background: #11171d;
+}
+
+.scene-metadata dt,
+.original-ids dt {
+  color: #8290a1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scene-metadata dd,
+.original-ids dd {
+  overflow-wrap: anywhere;
+  margin: 5px 0 0;
+}
+
+.scene-metadata dd {
+  color: #c9eefe;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.scene-block {
+  margin-top: 18px;
+}
+
+.scene-block h4 {
+  margin: 0 0 7px;
+  color: #aab6c4;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scene-block p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.final-prompt {
+  max-height: 15.5rem;
+  overflow: auto;
+  padding: 13px;
+  color: #cad5df;
+  border: 1px solid #2c3641;
+  border-radius: 8px;
+  background: #0d1217;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
+.original-ids dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.original-ids dl > div {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.original-ids dd {
+  color: #aab6c4;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
 @media (max-width: 680px) {
   .app-shell {
     padding-top: 32px;
@@ -340,5 +480,13 @@ button:hover {
 
   .primary-control {
     text-align: center;
+  }
+
+  .scene-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scene-metadata {
+    grid-template-columns: 1fr;
   }
 }
